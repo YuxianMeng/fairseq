@@ -32,6 +32,8 @@ def load_langpair_dataset(
 
     src_datasets = []
     tgt_datasets = []
+    src_label_datasets = []
+    tgt_label_datasets = []
 
     for k in itertools.count():
         split_k = split + (str(k) if k > 0 else '')
@@ -51,6 +53,10 @@ def load_langpair_dataset(
                                                          fix_lua_indexing=True, dictionary=src_dict))
         tgt_datasets.append(indexed_dataset.make_dataset(prefix + tgt, impl=dataset_impl,
                                                          fix_lua_indexing=True, dictionary=tgt_dict))
+        src_label_datasets.append(indexed_dataset.make_dataset(path=prefix + "gec_src.label",
+                                                               impl=dataset_impl, fix_lua_indexing=True))
+        tgt_label_datasets.append(indexed_dataset.make_dataset(path=prefix + "gec_tgt.label",
+                                                               impl=dataset_impl, fix_lua_indexing=True))
 
         print('| {} {} {}-{} {} examples'.format(data_path, split_k, src, tgt, len(src_datasets[-1])))
 
@@ -61,15 +67,23 @@ def load_langpair_dataset(
 
     if len(src_datasets) == 1:
         src_dataset, tgt_dataset = src_datasets[0], tgt_datasets[0]
+        src_label_dataset, tgt_label_dataset = src_label_datasets[0], tgt_label_datasets[0]
     else:
         sample_ratios = [1] * len(src_datasets)
         sample_ratios[0] = upsample_primary
         src_dataset = ConcatDataset(src_datasets, sample_ratios)
         tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
+        if (all([x is not None for x in src_label_datasets]) and
+                all([x is not None for x in tgt_label_datasets])):
+            src_label_dataset = ConcatDataset(src_label_datasets, sample_ratios)
+            tgt_label_dataset = ConcatDataset(tgt_label_datasets, sample_ratios)
+        else:
+            src_label_dataset = None
+            tgt_label_dataset = None
 
     return LanguagePairDataset(
-        src_dataset, src_dataset.sizes, src_dict,
-        tgt_dataset, tgt_dataset.sizes, tgt_dict,
+        src_dataset, src_dataset.sizes, src_dict, src_label_dataset,
+        tgt_dataset, tgt_dataset.sizes, tgt_dict, tgt_label_dataset,
         left_pad_source=left_pad_source,
         left_pad_target=left_pad_target,
         max_source_positions=max_source_positions,
@@ -189,7 +203,7 @@ class TranslationTask(FairseqTask):
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths):
-        return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary)
+        return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary, None)
 
     def max_positions(self):
         """Return the max sentence length allowed by the task."""

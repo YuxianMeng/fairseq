@@ -39,6 +39,9 @@ class CrossEntropyCriterion(FairseqCriterion):
         return loss, sample_size, logging_output
 
     def compute_loss(self, model, net_output, sample, reduce=True):
+        if (self.args.positive_label_weight != 1 and self.training
+                and sample is not None and sample.get('target_label', None) is not None):
+            return self.compute_weighted_loss(model, net_output, sample, reduce=True)
         lprobs = model.get_normalized_probs(net_output, log_probs=True)
         lprobs = lprobs.view(-1, lprobs.size(-1))
         target = model.get_targets(sample, net_output).view(-1)
@@ -48,6 +51,23 @@ class CrossEntropyCriterion(FairseqCriterion):
             ignore_index=self.padding_idx,
             reduction='sum' if reduce else 'none',
         )
+        return loss, loss
+
+    def compute_weighted_loss(self, model, net_output, sample, reduce=True):
+        lprobs = model.get_normalized_probs(net_output, log_probs=True, sample=sample)
+        lprobs = lprobs.view(-1, lprobs.size(-1))
+        target = model.get_targets(sample, net_output).view(-1)
+
+        target_label = sample['target_label'].view(-1).byte()
+        neg_target = target.clone().detach().masked_fill_(target_label, self.padding_idx)
+        pos_target = target.clone().detach().masked_fill_(1 - target_label, self.padding_idx)
+
+        neg_loss = F.nll_loss(lprobs, neg_target, size_average=False, ignore_index=self.padding_idx,
+                              reduce=reduce)
+        pos_loss = F.nll_loss(lprobs, pos_target, size_average=False, ignore_index=self.padding_idx,
+                              reduce=reduce)
+        loss = (1 / self.args.positive_label_weight) * neg_loss + pos_loss
+
         return loss, loss
 
     @staticmethod
