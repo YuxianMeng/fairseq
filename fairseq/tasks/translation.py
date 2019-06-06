@@ -137,6 +137,8 @@ class TranslationTask(FairseqTask):
                             help='max number of tokens in the target sequence')
         parser.add_argument('--upsample-primary', default=1, type=int,
                             help='amount to upsample primary dataset')
+        parser.add_argument('--copy-ext-dict', action='store_true', default=False,
+                            help='use copy extended dict')
         # fmt: on
 
     def __init__(self, args, src_dict, tgt_dict):

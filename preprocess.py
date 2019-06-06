@@ -61,6 +61,10 @@ def main(args):
     if target and not args.tgtdict and os.path.exists(dict_path(args.target_lang)):
         raise FileExistsError(dict_path(args.target_lang))
 
+    if args.copy_ext_dict:
+        assert args.joined_dictionary, \
+            "--joined-dictionary must be set if --copy-extended-dictionary is specified"
+
     if args.joined_dictionary:
         assert not args.srcdict or not args.tgtdict, \
             "cannot use both --srcdict and --tgtdict with --joined-dictionary"
@@ -95,13 +99,15 @@ def main(args):
     if target and tgt_dict is not None:
         tgt_dict.save(dict_path(args.target_lang))
 
-    def make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers):
+    def make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers, copy_src_words=None):
         print("| [{}] Dictionary: {} types".format(lang, len(vocab) - 1))
         n_seq_tok = [0, 0]
         replaced = Counter()
+        copyied = Counter()
 
         def merge_result(worker_result):
             replaced.update(worker_result["replaced"])
+            copyied.update(worker_result["copied"])
             n_seq_tok[0] += worker_result["nseq"]
             n_seq_tok[1] += worker_result["ntok"]
 
@@ -130,10 +136,18 @@ def main(args):
             pool.close()
 
         ds = indexed_dataset.make_builder(dataset_dest_file(args, output_prefix, lang, "bin"), impl=args.dataset_impl)
+
+        # todo:支持多进程的写法
+        words_list = []
+        def binarize_consumer(ids, words):
+            ds.add_item(ids)
+            words_list.append(words)
+
         merge_result(
             Binarizer.binarize(
-                input_file, vocab, lambda t: ds.add_item(t),
-                offset=0, end=offsets[1]
+                input_file, vocab, binarize_consumer,
+                offset=0, end=offsets[1],
+                copy_ext_dict=args.copy_ext_dict, copy_src_words=copy_src_words
             )
         )
         if num_workers > 1:
@@ -157,8 +171,9 @@ def main(args):
                 vocab.unk_word,
             )
         )
+        return words_list
 
-    def make_dataset(vocab, input_prefix, output_prefix, lang, num_workers=1):
+    def make_dataset(vocab, input_prefix, output_prefix, lang, num_workers=1, copy_src_words=None):
         if args.dataset_impl == "raw":
             # Copy original text file to destination folder
             output_text_file = dest_path(
@@ -166,24 +181,31 @@ def main(args):
                 lang,
             )
             shutil.copyfile(file_name(input_prefix, lang), output_text_file)
+            return None
         else:
-            make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers)
+            return make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers, copy_src_words)
 
-    def make_all(lang, vocab):
+    def make_all(lang, vocab, source_words_list_dict=None):
+        source_words_list_dict = source_words_list_dict or dict()
+        words_list_dict = dict()
+
         if args.trainpref:
-            make_dataset(vocab, args.trainpref, "train", lang, num_workers=args.workers)
+            words_list_dict["train"] = make_dataset(vocab, args.trainpref, "train", lang, num_workers=args.workers,
+                                                    copy_src_words=source_words_list_dict.get("train", None))
         if args.validpref:
             for k, validpref in enumerate(args.validpref.split(",")):
                 outprefix = "valid{}".format(k) if k > 0 else "valid"
-                make_dataset(vocab, validpref, outprefix, lang, num_workers=args.workers)
+                words_list_dict["valid"] = make_dataset(vocab, validpref, outprefix, lang, num_workers=args.workers,
+                                                        copy_src_words=source_words_list_dict.get("valid", None))
         if args.testpref:
             for k, testpref in enumerate(args.testpref.split(",")):
                 outprefix = "test{}".format(k) if k > 0 else "test"
-                make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
-
-    make_all(args.source_lang, src_dict)
+                words_list_dict["test"] = make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers,
+                                                        copy_src_words=source_words_list_dict.get("test", None))
+        return words_list_dict
+    source_words_list_dict = make_all(args.source_lang, src_dict)
     if target:
-        make_all(args.target_lang, tgt_dict)
+        target_words_list_dict = make_all(args.target_lang, tgt_dict, source_words_list_dict)
 
     print("| Wrote preprocessed data to {}".format(args.destdir))
 

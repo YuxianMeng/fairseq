@@ -21,6 +21,8 @@ def main(args):
         '--sampling requires --nbest to be equal to --beam'
     assert args.replace_unk is None or args.raw_text, \
         '--replace-unk requires a raw text dataset (--raw-text)'
+    assert not args.copy_ext_dict or args.dataset_impl == 'raw', \
+        '--copy-ext-dict requires a raw text dataset (--raw-text)'
 
     utils.import_user_module(args)
 
@@ -53,7 +55,7 @@ def main(args):
     for model in models:
         model.make_generation_fast_(
             beamable_mm_beam_size=None if args.no_beamable_mm else args.beam,
-            need_attn=args.print_alignment,
+            need_attn=args.print_alignment or args.copy_ext_dict,
         )
         if args.fp16:
             model.half()
@@ -63,6 +65,8 @@ def main(args):
     # Load alignment dictionary for unknown word replacement
     # (None if no unknown word replacement, empty if no path to align dictionary)
     align_dict = utils.load_align_dict(args.replace_unk)
+    if align_dict is None and args.copy_ext_dict:
+        align_dict = {} # build empty dict for copy.
 
     # Load dataset (possibly sharded)
     itr = task.get_batch_iterator(

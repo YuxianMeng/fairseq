@@ -33,6 +33,7 @@ class SequenceGenerator(object):
         diverse_beam_strength=0.5,
         match_source_len=False,
         no_repeat_ngram_size=0,
+        copy_ext_dict=False,
     ):
         """Generates translations of a given source sentence.
 
@@ -69,10 +70,10 @@ class SequenceGenerator(object):
         self.pad = tgt_dict.pad()
         self.unk = tgt_dict.unk()
         self.eos = tgt_dict.eos()
-        self.vocab_size = len(tgt_dict)
+        self.fixed_vocab_size = len(tgt_dict)
         self.beam_size = beam_size
         # the max beam size is the dictionary size - 1, since we never select pad
-        self.beam_size = min(beam_size, self.vocab_size - 1)
+        self.beam_size = min(beam_size, self.fixed_vocab_size - 1)
         self.max_len_a = max_len_a
         self.max_len_b = max_len_b
         self.min_len = min_len
@@ -84,6 +85,7 @@ class SequenceGenerator(object):
         self.temperature = temperature
         self.match_source_len = match_source_len
         self.no_repeat_ngram_size = no_repeat_ngram_size
+        self.copy_ext_dict = copy_ext_dict
 
         assert sampling_topk < 0 or sampling, '--sampling-topk requires --sampling'
         assert temperature > 0, '--temperature must be greater than 0'
@@ -134,6 +136,11 @@ class SequenceGenerator(object):
         bsz = input_size[0]
         src_len = input_size[1]
         beam_size = self.beam_size
+
+        # update vocab size with src token length
+        self.vocab_size = self.fixed_vocab_size
+        if self.copy_ext_dict:
+            self.vocab_size += src_len
 
         if self.match_source_len:
             max_len = src_lengths.max().item()

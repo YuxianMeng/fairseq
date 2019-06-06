@@ -118,6 +118,7 @@ def train(args, trainer, task, epoch_itr):
     valid_subsets = args.valid_subset.split(',')
     max_update = args.max_update or math.inf
     for i, samples in enumerate(progress, start=epoch_itr.iterations_in_epoch):
+
         log_output = trainer.train_step(samples)
         if log_output is None:
             continue
@@ -174,6 +175,7 @@ def get_training_stats(trainer):
         stats['nll_loss'] = nll_loss
     else:
         nll_loss = trainer.get_meter('train_loss')
+    stats['copy_alpha'] = trainer.get_meter('copy_alpha')
     stats['ppl'] = utils.get_perplexity(nll_loss.avg)
     stats['wps'] = trainer.get_meter('wps')
     stats['ups'] = trainer.get_meter('ups')

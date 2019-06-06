@@ -64,6 +64,7 @@ class Trainer(object):
         self.meters['train_nll_loss'] = AverageMeter()
         self.meters['valid_loss'] = AverageMeter()
         self.meters['valid_nll_loss'] = AverageMeter()
+        self.meters['copy_alpha'] = AverageMeter()
         self.meters['wps'] = TimeMeter()       # words per second
         self.meters['ups'] = TimeMeter()       # updates per second
         self.meters['wpb'] = AverageMeter()    # words per batch
@@ -340,6 +341,8 @@ class Trainer(object):
             self.meters['wpb'].update(ntokens)
             self.meters['bsz'].update(nsentences)
             self.meters['gnorm'].update(grad_norm)
+            if hasattr(self.model, "copy_attention"):
+                self.meters['copy_alpha'].update(logging_output.get('copy_alpha'))
             self.meters['clip'].update(
                 1. if grad_norm > self.args.clip_norm and self.args.clip_norm > 0 else 0.
             )

@@ -177,6 +177,7 @@ def noise_with_ner(filename, ofile_prefix, noise, limit=None, nerfilename=None):
             while True:
                 yield " ".join(["O"]*1000)
         nerfin = fake_nerfin()
+    # allennlp_file = open(f'{ofile_prefix}.allennlp', "w")
     with open(f'{ofile_prefix}.src', "w") as src_file:
         with open(f'{ofile_prefix}.tgt', "w") as tgt_file:
             with open(f'{ofile_prefix}.forward', "w") as align_file:
@@ -210,13 +211,17 @@ def noise_with_ner(filename, ofile_prefix, noise, limit=None, nerfilename=None):
                             align_file.write(' '.join(align) + '\n')
                             gec_src_file.write(' '.join(src_labels) + '\n')
                             gec_tgt_file.write(' '.join(tgt_labels) + '\n')
+                            # allennlp_line = " ".join(f"{src_char}###{tgt_char}" for src_char, tgt_char in zip(src, tgt))
+                            # allennlp_file.write(allennlp_line+"\n")
                             if idx % 10000 == 0:
                                 print(''.join(src))
                                 print(''.join(tgt))
+                                # print(allennlp_line)
                                 print("".join(src_labels))
 
     textfin.close()
     nerfin.close()
+    # allennlp_file.close()
     print(f"data saved to {ofile_prefix}.src/tgt/forward")
 
 
@@ -226,9 +231,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-e', '--epoch', type=int, default=0)
     parser.add_argument('-s', '--seed', type=int, default=0)
-    parser.add_argument('-l', '--limit', type=int, default=1e9)
+    parser.add_argument('-l', '--limit', type=int, default=3e6)
     parser.add_argument('-n', '--noise', type=float, default=0.15)
-    parser.add_argument('--ofile-prefix', type=str, default=f'/data/nfsdata2/yuxian/datasets/gec/zh_giga_20190525')
+    parser.add_argument('--ofile-prefix', type=str, default=f'/data/nfsdata2/yuxian/datasets/gec/zh_giga_20190606')
     parser.add_argument('--txtfile', type=str, default=f'/data/nfsdata2/yuxian/datasets/nlp_corpus/zh_giga_tgt.txt.text')
     parser.add_argument('--nerfile', type=str, default=f'/data/nfsdata2/yuxian/datasets/nlp_corpus/zh_giga_tgt.txt.ner')
 

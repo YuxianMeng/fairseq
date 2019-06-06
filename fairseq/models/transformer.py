@@ -105,6 +105,14 @@ class TransformerModel(FairseqEncoderDecoderModel):
                                  'Must be used with adaptive_loss criterion'),
         parser.add_argument('--adaptive-softmax-dropout', type=float, metavar='D',
                             help='sets adaptive softmax dropout for the tail projections')
+        parser.add_argument('--copy-attention', default=False, action='store_true',
+                            help='train transformer decoder with copy attention')
+        parser.add_argument('--copy-attention-heads', type=int, metavar='N', default=1,
+                            help='num copy layer attention heads')
+        parser.add_argument('--copy-attention-dropout', type=float, metavar='D', default=0.,
+                            help='num copy layer attention dropout')
+        parser.add_argument('--pretrained-model', type=str, default='',
+                            help='path to the pre-trained model')
         # fmt: on
 
     @classmethod
@@ -220,6 +228,10 @@ class TransformerEncoder(FairseqEncoder):
                 - **encoder_padding_mask** (ByteTensor): the positions of
                   padding elements of shape `(batch, src_len)`
         """
+        # map oov tokens to unk tokens
+        input_src_tokens = src_tokens
+        src_tokens = src_tokens.masked_fill(src_tokens >= len(self.dictionary), self.dictionary.unk_index)
+
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(src_tokens)
         if self.embed_positions is not None:
@@ -244,6 +256,7 @@ class TransformerEncoder(FairseqEncoder):
         return {
             'encoder_out': x,  # T x B x C
             'encoder_padding_mask': encoder_padding_mask,  # B x T
+            'src_tokens': input_src_tokens, # B x T
         }
 
     def reorder_encoder_out(self, encoder_out, new_order):
@@ -263,6 +276,9 @@ class TransformerEncoder(FairseqEncoder):
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(0, new_order)
+        if encoder_out['src_tokens'] is not None:
+            encoder_out['src_tokens'] = \
+                encoder_out['src_tokens'].index_select(0, new_order)
         return encoder_out
 
     def max_positions(self):
@@ -358,6 +374,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         else:
             self.layer_norm = None
 
+        self.copy_attention = args.copy_attention
+        self.attention_dropout = args.attention_dropout
+        if self.copy_attention:
+            self.copy_attn_layer = MultiheadAttention(
+                embed_dim, args.copy_attention_heads, dropout=args.copy_attention_dropout)
+            self.copy_alpha_linear = nn.Linear(embed_dim, 1)
+
     def forward(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
         """
         Args:
@@ -374,7 +397,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 - a dictionary with any model-specific outputs
         """
         x, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state)
-        x = self.output_layer(x)
+        x = self.output_layer(x) #if not self.copy_attention else self.copy_output_layer(x, extra)
         return x, extra
 
     def extract_features(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
@@ -396,6 +419,10 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             prev_output_tokens = prev_output_tokens[:, -1:]
             if positions is not None:
                 positions = positions[:, -1:]
+
+        # map oov tokens to unk tokens
+        prev_output_tokens = prev_output_tokens.masked_fill(
+            prev_output_tokens >= self.embed_tokens.num_embeddings, self.dictionary.unk_index)
 
         # embed tokens and positions
         x = self.embed_scale * self.embed_tokens(prev_output_tokens)
@@ -424,6 +451,23 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             )
             inner_states.append(x)
 
+        copy_attn, copy_alpha = None, None
+        if self.copy_attention:
+            assert encoder_out is not None, \
+                "--copy-attn can't be used with decoder only architecture"
+            x_copy, copy_attn = self.copy_attn_layer(
+                query=x,
+                key=encoder_out['encoder_out'],
+                value=encoder_out['encoder_out'],
+                key_padding_mask=encoder_out['encoder_padding_mask'],
+                incremental_state=incremental_state,
+                static_kv=True,
+                need_weights=True,
+            )
+            x_copy = x_copy.transpose(0, 1)
+            copy_alpha = torch.sigmoid(self.copy_alpha_linear(x_copy))
+            attn = copy_attn # use copy attn for alignment
+
         if self.layer_norm:
             x = self.layer_norm(x)
 
@@ -433,7 +477,9 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {'attn': attn, 'inner_states': inner_states}
+        return x, {'attn': attn, 'inner_states': inner_states,
+                   'copy_attn': copy_attn, 'copy_alpha': copy_alpha,
+                   'src_tokens': encoder_out['src_tokens'] if encoder_out else None}
 
     def output_layer(self, features, **kwargs):
         """Project features to the vocabulary size."""
@@ -445,6 +491,45 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 return F.linear(features, self.embed_out)
         else:
             return features
+
+    def get_normalized_probs(self, net_output, log_probs, sample):
+        """Get normalized probabilities (or log probs) from a net's output."""
+
+        if not self.copy_attention:
+            return super().get_normalized_probs(net_output, log_probs, sample)
+
+        logits = net_output[0].float()
+
+        copy_attn = net_output[1]['copy_attn']
+        copy_alpha = net_output[1]['copy_alpha']
+        src_tokens = net_output[1]['src_tokens']
+        src_len = src_tokens.size(1)
+
+        is_incre = len(logits.size()) == 2  # b * h
+        if is_incre:
+            logits = logits.unsqueeze(1)  # b * 1 * h
+
+        src_tokens = src_tokens.unsqueeze(1).repeat(1, logits.size(1), 1)  # b * 1 * L
+
+        scores = F.softmax(logits, dim=-1)  # b * 1 * h
+        ext_scores = torch.zeros(scores.size(0), scores.size(1), src_len).float()  # b * 1 * L
+        if src_tokens.device.type == 'cuda':
+            ext_scores = ext_scores.cuda()
+        composite_scores = torch.cat([scores, ext_scores], dim=-1)  # b * 1 * (h+L)
+
+        composite_scores = (1 - copy_alpha) * composite_scores
+        copy_scores = copy_alpha * copy_attn
+        composite_scores.scatter_add_(-1, src_tokens, copy_scores)
+
+        if is_incre:
+            composite_scores = composite_scores.squeeze(1)
+
+        if log_probs:
+            result = torch.log(composite_scores + 1e-12)
+        else:
+            result = composite_scores
+
+        return result
 
     def max_positions(self):
         """Maximum output length supported by the decoder."""
@@ -778,6 +863,10 @@ def base_architecture(args):
 
     args.decoder_output_dim = getattr(args, 'decoder_output_dim', args.decoder_embed_dim)
     args.decoder_input_dim = getattr(args, 'decoder_input_dim', args.decoder_embed_dim)
+
+    args.copy_attention = getattr(args, 'copy_attention', False)
+    args.copy_attention_heads = getattr(args, 'copy_attention_heads', 1)
+    args.recursive = getattr(args, 'recursive', 1)
 
 
 @register_model_architecture('transformer', 'transformer_iwslt_de_en')
