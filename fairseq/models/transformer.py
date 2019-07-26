@@ -374,12 +374,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         else:
             self.layer_norm = None
 
-        self.copy_attention = args.copy_attention
-        self.attention_dropout = args.attention_dropout
-        if self.copy_attention:
-            self.copy_attn_layer = MultiheadAttention(
-                embed_dim, args.copy_attention_heads, dropout=args.copy_attention_dropout)
-            self.copy_alpha_linear = nn.Linear(embed_dim, 1)
+        self.copy_attention = args.copy_attention if hasattr(args, "copy_attention") else None
+        if self.copy_attention is not None:
+            self.attention_dropout = args.attention_dropout
+            if self.copy_attention:
+                self.copy_attn_layer = MultiheadAttention(
+                    embed_dim, args.copy_attention_heads, dropout=args.copy_attention_dropout)
+                self.copy_alpha_linear = nn.Linear(embed_dim, 1)
 
     def forward(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
         """
@@ -517,8 +518,11 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             ext_scores = ext_scores.cuda()
         composite_scores = torch.cat([scores, ext_scores], dim=-1)  # b * 1 * (h+L)
 
-        composite_scores = (1 - copy_alpha) * composite_scores
+        # composite_scores = copy_alpha * composite_scores
+        # copy_scores = (1 - copy_alpha) * copy_attn
+        composite_scores = (1-copy_alpha) * composite_scores
         copy_scores = copy_alpha * copy_attn
+
         composite_scores.scatter_add_(-1, src_tokens, copy_scores)
 
         if is_incre:

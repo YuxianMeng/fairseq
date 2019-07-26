@@ -45,7 +45,6 @@ __all__ = [
 ]
 
 
-
 def build_model(args, task):
     return ARCH_MODEL_REGISTRY[args.arch].build_model(args, task)
 

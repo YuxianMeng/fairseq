@@ -61,7 +61,7 @@ class LanguageModelingTask(FairseqTask):
         parser.add_argument('data', help='path to data directory')
         parser.add_argument('--sample-break-mode',
                             choices=['none', 'complete', 'eos'],
-                            help='If omitted or "none", fills each sample with tokens-per-sample '
+                            help='If omitted or "none", fills each sample with  '
                                  'tokens. If set to "complete", splits samples only at the end '
                                  'of sentence, but may include multiple sentences per sample. '
                                  'If set to "eos", includes only one sentence per sample.')
